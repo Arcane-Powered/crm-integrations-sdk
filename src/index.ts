@@ -81,3 +81,13 @@ export {
   type TestConnectionResult,
 } from './run.js';
 export { shape, type OutputShape, type ScalarType } from './shape.js';
+export {
+  fromManifest,
+  manifestSchema,
+  parseManifest,
+  type IntegrationManifest,
+  type ManifestHandler,
+  type ManifestHooks,
+  type ManifestRenderer,
+  type ManifestValidator,
+} from './manifest.js';

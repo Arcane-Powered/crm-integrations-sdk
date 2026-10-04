@@ -1,6 +1,6 @@
 {
   "name": "@arcanepowered/integrations-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Define third-party API integrations in one file: typed connection fields, auth, operations and an SSRF-guarded HTTP client.",
   "license": "Apache-2.0",
   "author": "Arcane Powered",

@@ -19,7 +19,68 @@ pnpm add @arcanepowered/integrations-sdk zod
 
 `zod` (^4.6) is a peer dependency: the host and the integrations must share one zod instance.
 
-## Write an integration
+## Write an integration in YAML (recommended)
+
+Most REST integrations are pure configuration. Describe them in a manifest, parse it with any YAML library and pass it
+to `fromManifest`:
+
+```yaml
+id: bank
+label: Bank
+base_url: https://api.bank.example/v2
+
+connection:
+  login:     { label: Login, private: true }              # encrypted, shown as a normal input
+  secretKey: { label: Secret key, secret: true, pattern: '^\S{8,}$', error: Invalid key }
+
+auth:
+  header: { name: Authorization, value: '{{login}}:{{secretKey}}' }   # or basic: {username, password} / bearer: '{{token}}'
+
+test: GET /organization
+
+operations:
+  transactions:
+    label: Transactions
+    description: Lists the transactions of an account.
+    params:
+      iban:   { label: IBAN, required: true }
+      status: { label: Status, type: select, options: { completed: Completed, pending: Pending } }
+      since:  { label: Settled since, type: date, template: true }
+    request:
+      path: /transactions
+      query: { iban: '{{iban}}', 'status[]': '{{status}}', settled_at_from: '{{since}}' }
+    output:
+      items: { path: $.transactions, type: list, item: object, label: Transactions }
+      total: { path: $.meta.total_count, type: number }
+    output_doc: '{ items, total }'
+```
+
+```ts
+import { parse } from 'yaml';
+import { fromManifest } from '@arcanepowered/integrations-sdk';
+
+export const bank = fromManifest(parse(await readFile('bank.yaml', 'utf8')));
+```
+
+Reference:
+
+- **connection fields**: `label`, `help`, `placeholder`, `type` (`text` · `url` · `email`), `secret` (masked, encrypted),
+  `private` (encrypted, plain input), `required` (default `true`), `trim` (default `true`), `pattern`, `max_length`,
+  `error`, `validate` (named validator). Fields that are neither `secret` nor `private` are public config.
+- **params**: `type` (`text` · `textarea` · `code` · `number` · `boolean` · `date` · `select` · `multiselect`), `required`,
+  `default`, `min`, `max`, `integer`, `pattern`, `max_length`, `max_items`, `options` (map or list), `show_if`
+  (`{ otherParam: value }`; hidden params are never sent), `advanced`, `error`, `template` (accepts host expressions),
+  `render` (named renderer for template values).
+- **request**: `method`, `path`, `query`, `body`. `{{param}}` placeholders; an empty value drops the query or body key.
+- **rules**: `exactly_one_of: [a, b]` with an `error`.
+- **output**: `{ key: { path: $.a.b, type, label, item, show_if } }`, types `text` · `number` · `boolean` · `date` ·
+  `datetime` · `object` · `list` · `any`.
+- **escape hatches**: an operation can use `handler: name` instead of `request`; pass the code in
+  `fromManifest(manifest, { handlers, renderers, validators })`.
+
+Every mistake is reported with its location (`bank.operations.transactions.request: unknown placeholder {{ibn}}`).
+
+## Write an integration in TypeScript
 
 ```ts
 import { z } from 'zod';
