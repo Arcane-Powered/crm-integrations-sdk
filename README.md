@@ -1,4 +1,4 @@
-# @arcane-powered/integrations-sdk
+# @arcanepowered/integrations-sdk
 
 Write a third-party API integration in **one file**: connection fields, authentication, a connection test and typed
 operations. A host application (a CRM, a workflow engine, an agent) reads that single definition to render the connection
@@ -10,11 +10,11 @@ form, store secrets, test credentials, build its blocks or tools and run calls t
   every resolved address is public. Redirects are refused unless you opt in, responses are size-limited, and
   credentials are dropped on a cross-host redirect.
 - **Isomorphic core.** The main entry has no `node:` import, so definitions can be bundled for the browser or a
-  sandboxed runtime. The Node adapter (DNS-pinned `fetch`) lives in `@arcane-powered/integrations-sdk/node`.
-- **Testable without network.** `@arcane-powered/integrations-sdk/testing` mocks HTTP and runs operations end to end.
+  sandboxed runtime. The Node adapter (DNS-pinned `fetch`) lives in `@arcanepowered/integrations-sdk/node`.
+- **Testable without network.** `@arcanepowered/integrations-sdk/testing` mocks HTTP and runs operations end to end.
 
 ```sh
-pnpm add @arcane-powered/integrations-sdk zod
+pnpm add @arcanepowered/integrations-sdk zod
 ```
 
 `zod` (^4.6) is a peer dependency: the host and the integrations must share one zod instance.
@@ -23,7 +23,7 @@ pnpm add @arcane-powered/integrations-sdk zod
 
 ```ts
 import { z } from 'zod';
-import { auth, defineIntegration, field, secret, shape, template } from '@arcane-powered/integrations-sdk';
+import { auth, defineIntegration, field, secret, shape, template } from '@arcanepowered/integrations-sdk';
 
 export const github = defineIntegration({
   id: 'github',
@@ -99,8 +99,8 @@ Mark writes with `kind: 'write'` so hosts deduplicate retries.
 ## Host side
 
 ```ts
-import { applyTemplates, callOperation, connectionForm, connectionSecretValues, openConnection, parseConnection, testConnection } from '@arcane-powered/integrations-sdk';
-import { pinnedFetch, resolveHostAll } from '@arcane-powered/integrations-sdk/node';
+import { applyTemplates, callOperation, connectionForm, connectionSecretValues, openConnection, parseConnection, testConnection } from '@arcanepowered/integrations-sdk';
+import { pinnedFetch, resolveHostAll } from '@arcanepowered/integrations-sdk/node';
 
 const form = connectionForm(github);
 const parsed = parseConnection(github, body);
@@ -120,7 +120,7 @@ check-then-fetch.
 ## Test an integration
 
 ```ts
-import { mockHttp, runOperation, runTest } from '@arcane-powered/integrations-sdk/testing';
+import { mockHttp, runOperation, runTest } from '@arcanepowered/integrations-sdk/testing';
 
 const http = mockHttp((req) => (req.url.pathname === '/search/issues' ? { json: { items: [{ title: 'Bug' }] } } : { status: 404 }));
 const out = await runOperation(github, 'search_issues', { query: 'is:open' }, { config: { owner: 'acme' }, secrets: { token: 'x'.repeat(20) }, http });
