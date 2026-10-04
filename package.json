@@ -6,10 +6,10 @@
   "author": "Arcane Powered",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Arcane-Powered/integrations-sdk.git"
+    "url": "git+https://github.com/Arcane-Powered/crm-integrations-sdk.git"
   },
-  "homepage": "https://github.com/Arcane-Powered/integrations-sdk#readme",
-  "bugs": "https://github.com/Arcane-Powered/integrations-sdk/issues",
+  "homepage": "https://github.com/Arcane-Powered/crm-integrations-sdk#readme",
+  "bugs": "https://github.com/Arcane-Powered/crm-integrations-sdk/issues",
   "keywords": [
     "integrations",
     "connectors",
