@@ -4,6 +4,7 @@ import { defineIntegration, IntegrationDefinitionError, type CallContext, type C
 import { field, secret, template, type FieldMeta, type FieldWidget, type TemplateSegment } from './fields.js';
 import type { HttpMethod } from './net-guard.js';
 import { shape, type OutputShape, type ScalarType } from './shape.js';
+import { sourceValue, type SourceField, type SourceItem, type SourcePage, type SourceSpec, type SourceValue } from './source.js';
 
 const NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const PLACEHOLDER_RE = /\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}/g;
@@ -11,6 +12,8 @@ const EXACT_PLACEHOLDER_RE = /^\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}$/;
 const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?)?$/;
 const OUTPUT_PATH_RE = /^\$(?:\.[A-Za-z_][A-Za-z0-9_-]*)*$/;
+const SOURCE_PATH_RE = /^\$(?:\.[A-Za-z0-9_-]+)*$/;
+const SOURCE_VARS = ['cursor', 'since'] as const;
 
 const scalarValue = z.union([z.string(), z.number(), z.boolean()]);
 const showIfSchema = z.record(z.string().regex(NAME_RE), z.union([scalarValue, z.array(scalarValue).min(1)]));
@@ -90,6 +93,39 @@ const operationSchema = z
   })
   .refine((o) => (o.request === undefined) !== (o.handler === undefined), { message: 'declare either "request" or "handler"' });
 
+const sourceRequestSchema = z.strictObject({
+  method: z.enum(['GET', 'POST']).default('GET'),
+  path: z.string().startsWith('/'),
+  query: z.record(z.string(), z.union([scalarValue, z.array(scalarValue).min(1)])).optional(),
+  body: z.record(z.string(), z.unknown()).optional(),
+});
+
+const sourcePagesSchema = z.strictObject({
+  request: sourceRequestSchema,
+  items: z.string().regex(SOURCE_PATH_RE),
+  next: z.string().regex(SOURCE_PATH_RE).optional(),
+});
+
+const sourceFieldSchema = z.strictObject({
+  path: z.string().regex(SOURCE_PATH_RE),
+  label: z.string().min(1),
+});
+
+const sourceSchema = z
+  .strictObject({
+    label: z.string().min(1),
+    description: z.string().optional(),
+    target: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/).optional(),
+    list: sourcePagesSchema,
+    changes: sourcePagesSchema.optional(),
+    since: z.enum(['iso', 'unix', 'unix_ms']).default('iso'),
+    id: z.string().regex(SOURCE_PATH_RE),
+    updated_at: z.string().regex(SOURCE_PATH_RE).optional(),
+    fields: z.record(z.string().regex(NAME_RE), sourceFieldSchema).optional(),
+    fields_from: z.string().regex(SOURCE_PATH_RE).optional(),
+  })
+  .refine((s) => (s.fields === undefined) !== (s.fields_from === undefined), { message: 'declare either "fields" or "fields_from"' });
+
 const authSchema = z.union([
   z.strictObject({ basic: z.strictObject({ username: z.string(), password: z.string() }) }),
   z.strictObject({ bearer: z.string() }),
@@ -109,6 +145,7 @@ export const manifestSchema = z.strictObject({
     .regex(/^(GET|POST) \/\S*$/)
     .optional(),
   operations: z.record(z.string(), operationSchema).default({}),
+  sources: z.record(z.string(), sourceSchema).default({}),
 });
 
 export type IntegrationManifest = z.input<typeof manifestSchema>;
@@ -116,6 +153,8 @@ type Manifest = z.output<typeof manifestSchema>;
 type ParamDef = z.output<typeof paramSchema>;
 type OutputDef = z.output<typeof outputFieldSchema>;
 type OperationDef = z.output<typeof operationSchema>;
+type SourceDef = z.output<typeof sourceSchema>;
+type SourcePagesDef = z.output<typeof sourcePagesSchema>;
 
 export type ManifestHandler = (ctx: CallContext, params: Record<string, unknown>) => Promise<unknown>;
 export type ManifestRenderer = (segments: readonly TemplateSegment[]) => string;
@@ -312,6 +351,10 @@ function resolveValue(raw: unknown, values: Record<string, unknown>): unknown {
 function readPath(value: unknown, path: string): unknown {
   let current = value;
   for (const key of path.split('.').slice(1)) {
+    if (Array.isArray(current) && /^\d+$/.test(key)) {
+      current = current[Number(key)];
+      continue;
+    }
     if (current === null || typeof current !== 'object' || Array.isArray(current) || !Object.hasOwn(current, key)) return undefined;
     current = (current as Record<string, unknown>)[key];
   }
@@ -380,6 +423,87 @@ function requestRunner(op: OperationDef): OperationSpec<FieldShape, unknown, unk
   };
 }
 
+function resolveDeep(raw: unknown, values: Record<string, unknown>): unknown {
+  if (typeof raw === 'string') return resolveValue(raw, values);
+  if (Array.isArray(raw)) return raw.map((v) => resolveDeep(v, values)).filter((v) => v !== undefined);
+  if (isObject(raw)) return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, resolveDeep(v, values)]).filter(([, v]) => v !== undefined));
+  return raw;
+}
+
+function sinceText(since: string, format: SourceDef['since']): string {
+  const ms = new Date(since).getTime();
+  if (Number.isNaN(ms)) throw new IntegrationDefinitionError(`Invalid "since" date ${since}`);
+  if (format === 'unix') return String(Math.floor(ms / 1000));
+  if (format === 'unix_ms') return String(ms);
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function sourceItem(raw: unknown, def: SourceDef): SourceItem | null {
+  const id = readPath(raw, def.id);
+  if ((typeof id !== 'string' || id === '') && typeof id !== 'number') return null;
+  const at = def.updated_at ? readPath(raw, def.updated_at) : undefined;
+  const ms = typeof at === 'number' ? at : typeof at === 'string' ? Date.parse(at) : Number.NaN;
+  const fields: Record<string, SourceValue> = {};
+  const from = def.fields_from ? readPath(raw, def.fields_from) : undefined;
+  const entries: Array<[string, unknown]> = def.fields ? Object.entries(def.fields).map(([key, f]) => [key, readPath(raw, f.path)]) : Object.entries(isObject(from) ? from : {});
+  for (const [key, value] of entries) {
+    const v = sourceValue(value);
+    if (v !== undefined) fields[key] = v;
+  }
+  return { id: String(id), updatedAt: Number.isNaN(ms) ? null : new Date(ms).toISOString(), fields };
+}
+
+function sourcePageRunner(def: SourceDef, pages: SourcePagesDef): (ctx: CallContext, input: { cursor?: string | null; since?: string | null }) => Promise<SourcePage> {
+  const { request } = pages;
+  return async (ctx, input) => {
+    const values: Record<string, unknown> = {
+      ...(ctx.config as Record<string, unknown>),
+      cursor: input.cursor ?? undefined,
+      since: input.since ? sinceText(input.since, def.since) : undefined,
+    };
+    const path = request.path.replace(PLACEHOLDER_RE, (_m, name: string) => {
+      const v = values[name];
+      if (isEmpty(v)) throw new IntegrationDefinitionError(`Missing value for {{${name}}} in the request path`);
+      return encodeURIComponent(String(v));
+    });
+    const query = resolveDeep(request.query ?? {}, values) as Record<string, string | number | boolean | Array<string | number | boolean>>;
+    const body = request.body ? resolveDeep(request.body, values) : undefined;
+    const response = await ctx.http.request(request.method as HttpMethod, path, { query, ...(body !== undefined ? { json: body } : {}) });
+    const list = readPath(response, pages.items);
+    const items = (Array.isArray(list) ? list : []).map((raw) => sourceItem(raw, def)).filter((i): i is SourceItem => i !== null);
+    const nextRaw = pages.next ? readPath(response, pages.next) : undefined;
+    const next = (typeof nextRaw === 'string' && nextRaw !== '') || typeof nextRaw === 'number' ? String(nextRaw) : null;
+    return { items, next: next !== null && next !== (input.cursor ?? null) ? next : null };
+  };
+}
+
+function checkSourcePages(where: string, pages: SourcePagesDef, known: ReadonlySet<string>, needsSince: boolean): void {
+  const text = JSON.stringify(pages.request);
+  checkPlaceholders(where, text, known);
+  const used = new Set(placeholders(text));
+  if (pages.next && !used.has('cursor')) fail(where, '"next" needs a {{cursor}} placeholder in the request');
+  if (!pages.next && used.has('cursor')) fail(where, '{{cursor}} needs "next"');
+  if (needsSince !== used.has('since')) fail(where, needsSince ? 'changes need a {{since}} placeholder' : '{{since}} is only allowed in "changes"');
+}
+
+function sourceSpecOf(where: string, def: SourceDef, configNames: ReadonlySet<string>): SourceSpec {
+  const known = new Set([...configNames, ...SOURCE_VARS]);
+  checkSourcePages(`${where}.list`, def.list, known, false);
+  if (def.changes) checkSourcePages(`${where}.changes`, def.changes, known, true);
+  const list = sourcePageRunner(def, def.list);
+  const changes = def.changes ? sourcePageRunner(def, def.changes) : undefined;
+  const fields: SourceField[] = Object.entries(def.fields ?? {}).map(([key, f]) => ({ key, label: f.label }));
+  return {
+    label: def.label,
+    ...(def.description ? { description: def.description } : {}),
+    ...(def.target ? { target: def.target } : {}),
+    fields,
+    ...(def.fields_from ? { dynamicFields: true } : {}),
+    incremental: changes !== undefined,
+    read: (ctx, input) => (input.mode === 'changes' && changes ? changes(ctx, input) : list(ctx, input)),
+  };
+}
+
 function connectionValues(conn: Connection): Record<string, unknown> {
   return { ...(conn.config as Record<string, unknown>), ...(conn.secrets as Record<string, unknown>) };
 }
@@ -411,6 +535,8 @@ export function fromManifest(raw: unknown, hooks: ManifestHooks = {}): Integrati
   for (const [key, def] of Object.entries(m.connection)) {
     (def.secret || def.private ? secrets : config)[key] = connectionField(`${where}.connection.${key}`, def, hooks);
   }
+  const configNames = new Set(Object.entries(m.connection).filter(([, def]) => !def.secret && !def.private).map(([key]) => key));
+  const sources = Object.fromEntries(Object.entries(m.sources).map(([id, def]) => [id, sourceSpecOf(`${where}.sources.${id}`, def, configNames)]));
   const testDef = m.test?.split(' ') as [HttpMethod, string] | undefined;
   const baseUrl = m.base_url;
   return defineIntegration({
@@ -422,6 +548,7 @@ export function fromManifest(raw: unknown, hooks: ManifestHooks = {}): Integrati
     ...(baseUrl ? { baseUrl: (conn: Connection) => interpolate(baseUrl, connectionValues(conn)) } : {}),
     auth: authOf(m),
     ...(testDef ? { test: (ctx: CallContext) => ctx.http.request(testDef[0], interpolate(testDef[1], connectionValues(ctx))) } : {}),
+    sources,
     operations: () =>
       Object.fromEntries(
         Object.entries(m.operations).map(([id, op]) => {

@@ -3,6 +3,7 @@ import type { AuthResult } from './auth.js';
 import { getFieldMeta } from './fields.js';
 import type { HttpClient } from './http.js';
 import type { OutputShape } from './shape.js';
+import type { Source, SourceSpec } from './source.js';
 
 export type FieldShape = Record<string, z.ZodType>;
 
@@ -53,6 +54,7 @@ export interface IntegrationSpec<CS extends FieldShape, SS extends FieldShape, O
   auth: (conn: Connection<ShapeOutput<CS>, ShapeOutput<SS>>) => AuthResult;
   test?: (ctx: CallContext<ShapeOutput<CS>, ShapeOutput<SS>>) => Promise<unknown>;
   operations?: (op: OperationBuilder<ShapeOutput<CS>, ShapeOutput<SS>>) => O;
+  sources?: Record<string, SourceSpec<ShapeOutput<CS>, ShapeOutput<SS>>>;
 }
 
 export interface Integration<C = any, S = any> {
@@ -66,6 +68,7 @@ export interface Integration<C = any, S = any> {
   auth: (conn: Connection<C, S>) => AuthResult;
   test?: (ctx: CallContext<C, S>) => Promise<unknown>;
   operations: Record<string, Operation<any, C, S>>;
+  sources: Record<string, Source<C, S>>;
 }
 
 export type IntegrationOf<CS extends FieldShape, SS extends FieldShape, O> = Integration<ShapeOutput<CS>, ShapeOutput<SS>> & {
@@ -107,6 +110,11 @@ export function defineIntegration<CS extends FieldShape = {}, SS extends FieldSh
     checkShape(`${spec.id}.operations.${id}.params`, op.params, { secret: false, template: true });
     operations[id] = { ...op, id, schema: z.strictObject(op.params) };
   }
+  const sources: Record<string, Source<ShapeOutput<CS>, ShapeOutput<SS>>> = {};
+  for (const [id, source] of Object.entries(spec.sources ?? {})) {
+    if (!ID_RE.test(id)) throw new IntegrationDefinitionError(`${spec.id}: invalid source id "${id}"`);
+    sources[id] = { ...source, id };
+  }
   const baseUrl = spec.baseUrl;
   return {
     id: spec.id,
@@ -119,6 +127,7 @@ export function defineIntegration<CS extends FieldShape = {}, SS extends FieldSh
     auth: spec.auth,
     ...(spec.test ? { test: spec.test } : {}),
     operations,
+    sources,
   } as IntegrationOf<CS, SS, O>;
 }
 
