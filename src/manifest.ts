@@ -424,7 +424,7 @@ function requestRunner(op: OperationDef): OperationSpec<FieldShape, unknown, unk
 }
 
 function resolveDeep(raw: unknown, values: Record<string, unknown>): unknown {
-  if (typeof raw === 'string') return resolveValue(raw, values);
+  if (typeof raw === 'string') return placeholders(raw).some((name) => isEmpty(values[name])) ? undefined : resolveValue(raw, values);
   if (Array.isArray(raw)) return raw.map((v) => resolveDeep(v, values)).filter((v) => v !== undefined);
   if (isObject(raw)) return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, resolveDeep(v, values)]).filter(([, v]) => v !== undefined));
   return raw;
@@ -450,7 +450,8 @@ function sourceItem(raw: unknown, def: SourceDef): SourceItem | null {
     const v = sourceValue(value);
     if (v !== undefined) fields[key] = v;
   }
-  return { id: String(id), updatedAt: Number.isNaN(ms) ? null : new Date(ms).toISOString(), fields };
+  const date = new Date(ms);
+  return { id: String(id), updatedAt: Number.isFinite(date.getTime()) ? date.toISOString() : null, fields };
 }
 
 function sourcePageRunner(def: SourceDef, pages: SourcePagesDef): (ctx: CallContext, input: { cursor?: string | null; since?: string | null }) => Promise<SourcePage> {
@@ -470,7 +471,8 @@ function sourcePageRunner(def: SourceDef, pages: SourcePagesDef): (ctx: CallCont
     const body = request.body ? resolveDeep(request.body, values) : undefined;
     const response = await ctx.http.request(request.method as HttpMethod, path, { query, ...(body !== undefined ? { json: body } : {}) });
     const list = readPath(response, pages.items);
-    const items = (Array.isArray(list) ? list : []).map((raw) => sourceItem(raw, def)).filter((i): i is SourceItem => i !== null);
+    if (!Array.isArray(list)) throw new Error(`Source response has no array at "${pages.items}"`);
+    const items = list.map((raw) => sourceItem(raw, def)).filter((i): i is SourceItem => i !== null);
     const nextRaw = pages.next ? readPath(response, pages.next) : undefined;
     const next = (typeof nextRaw === 'string' && nextRaw !== '') || typeof nextRaw === 'number' ? String(nextRaw) : null;
     return { items, next: next !== null && next !== (input.cursor ?? null) ? next : null };

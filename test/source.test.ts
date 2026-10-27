@@ -116,6 +116,15 @@ describe('manifest sources', () => {
     await expect(runSource(listOnly, 'people', { mode: 'changes', since: '2026-10-27T08:00:00Z' }, { secrets, http })).rejects.toThrow('cannot list changes');
   });
 
+  it('fails on a response without the items array, drops a key with an empty placeholder, ignores out-of-range dates', async () => {
+    const mixed = fromManifest({ ...sheet, sources: { rows: { ...sheet.sources!.rows!, list: { request: { path: '/v0/{{base}}/rows', query: { page: '{{base}}:{{cursor}}' } }, items: '$.records', next: '$.offset' }, updated_at: '$.at' } } });
+    const http = mockHttp((req) => (req.url.searchParams.has('page') ? { json: { nope: [] } } : { json: { records: [{ id: 'r', at: 8.64e15 + 1, fields: {} }] } }));
+    const page = await runSource(mixed, 'rows', { mode: 'full' }, { config: { base: 'b' }, secrets, http });
+    expect(http.calls[0]!.url.searchParams.has('page')).toBe(false);
+    expect(page.items).toEqual([{ id: 'r', updatedAt: null, fields: {} }]);
+    await expect(runSource(mixed, 'rows', { mode: 'full', cursor: 'c2' }, { config: { base: 'b' }, secrets, http })).rejects.toThrow('Source response has no array at "$.records"');
+  });
+
   it('reports source mistakes with their location', () => {
     const people = crm.sources!.people!;
     const bad = (patch: Record<string, unknown>) => () => fromManifest({ ...crm, sources: { people: { ...people, ...patch } } });
