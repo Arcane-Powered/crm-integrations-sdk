@@ -1,6 +1,7 @@
 import type { Integration } from './define.js';
 import type { FetchLike, HostResolver } from './net-guard.js';
 import { callOperation, testConnection, type TestConnectionResult } from './run.js';
+import { readSource, type SourcePage, type SourceReadInput } from './source.js';
 
 export interface MockRequest {
   method: string;
@@ -75,6 +76,14 @@ export function runOperation(def: Integration, operationId: string, params: Reco
 
 export function runTest(def: Integration, opts: RunOptions): Promise<TestConnectionResult> {
   return testConnection(def, connectionOf(def, opts), {
+    fetch: opts.http.fetch,
+    resolveHost: opts.http.resolveHost,
+    signal: opts.signal ?? new AbortController().signal,
+  });
+}
+
+export function runSource(def: Integration, sourceId: string, input: SourceReadInput, opts: RunOptions): Promise<SourcePage> {
+  return readSource(def, sourceId, connectionOf(def, opts), input, {
     fetch: opts.http.fetch,
     resolveHost: opts.http.resolveHost,
     signal: opts.signal ?? new AbortController().signal,

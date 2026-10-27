@@ -78,7 +78,58 @@ Reference:
 - **escape hatches**: an operation can use `handler: name` instead of `request`; pass the code in
   `fromManifest(manifest, { handlers, renderers, validators })`.
 
+- **sources** (import records, see below): `label`, `description`, `target` (suggested host collection), `list` and
+  optional `changes` (`request`, `items` path, `next` cursor path), `since` (`iso`, to the second · `unix` · `unix_ms`), `id` and
+  `updated_at` paths, and either `fields` (`{ key: { path, label } }`) or `fields_from` (an object path whose keys become
+  the fields, for user-defined columns).
+
 Every mistake is reported with its location (`bank.operations.transactions.request: unknown placeholder {{ibn}}`).
+
+## Sources: import every record of an app
+
+A source lists the records of an app page by page, then only what changed, so a host can copy them (customers,
+contacts, rows). `{{cursor}}` takes the value read at `next` on the previous page (empty on the first page, which drops
+the key); `{{since}}` is the date of the last sync, rendered in the `since` format; public connection fields are also
+available. Paths accept array indexes (`$.emails.0.value`). Values become strings, numbers or booleans (a list of
+scalars is joined with `, `; objects are dropped).
+
+```yaml
+sources:
+  contacts:
+    label: Contacts
+    target: crm_contacts
+    list:
+      request: { path: /v3/contacts, query: { limit: 100, after: '{{cursor}}' } }
+      items: $.results
+      next: $.paging.next.after
+    changes:
+      request:
+        method: POST
+        path: /v3/contacts/search
+        body: { filters: [{ property: updated_at, gte: '{{since}}' }], after: '{{cursor}}' }
+      items: $.results
+      next: $.paging.next.after
+    since: unix_ms
+    id: $.id
+    updated_at: $.updatedAt
+    fields:
+      email: { path: $.properties.email, label: E-mail }
+      name: { path: $.properties.name, label: Name }
+```
+
+```ts
+import { readSource } from '@arcanepowered/integrations-sdk';
+
+let cursor: string | null = null;
+do {
+  const page = await readSource(integration, 'contacts', connection, { mode: 'full', cursor }, runtime);
+  for (const item of page.items) save(item.id, item.updatedAt, item.fields);
+  cursor = page.next;
+} while (cursor);
+```
+
+`mode: 'changes'` needs `since` and a source with `changes`. In TypeScript, pass `sources: { id: { label, fields,
+incremental, read } }` to `defineIntegration`. `runSource` in `/testing` runs a source against `mockHttp`.
 
 ## Write an integration in TypeScript
 

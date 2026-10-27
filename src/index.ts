@@ -82,6 +82,20 @@ export {
 } from './run.js';
 export { shape, type OutputShape, type ScalarType } from './shape.js';
 export {
+  getSource,
+  readSource,
+  sourceValue,
+  UnknownSourceError,
+  type Source,
+  type SourceField,
+  type SourceItem,
+  type SourceMode,
+  type SourcePage,
+  type SourceReadInput,
+  type SourceSpec,
+  type SourceValue,
+} from './source.js';
+export {
   fromManifest,
   manifestSchema,
   parseManifest,
